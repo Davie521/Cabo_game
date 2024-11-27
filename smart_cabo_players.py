@@ -5,6 +5,7 @@ class SmartPlayer(Player):
     def __init__(self, name):
         super().__init__(name)
         self.memory = {}  # 记录所有已知的牌信息，包括弃牌堆
+        self.known_opponent_cards = {}  # 记录对手已知的牌
 
     def decide_peek_initial(self):
         """决定初始要看哪张牌"""
@@ -57,6 +58,10 @@ class SmartPlayer(Player):
             if drawn_card.number < card.number:
                 return ("swap", pos)
         return "discard"
+
+    def peek_opponent_card(self, pos, card):
+        """记录偷看到的对手的牌"""
+        self.known_opponent_cards[pos] = card
 
 class SmartGame(Game):
     def __init__(self):

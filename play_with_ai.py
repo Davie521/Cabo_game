@@ -1,6 +1,15 @@
 from game_cabo import Game, Player, Card
-from train_ai_player import CaboAIPlayer
+try:
+    from train_ai_player import CaboAIPlayer
+except ImportError:
+    print("警告: 找不到DQN AI模块，只能使用规则AI")
+    HAS_DQN = False
+else:
+    HAS_DQN = True
+
+from smart_cabo_players import SmartPlayer
 import os
+import random
 
 class HumanPlayer(Player):
     def show_hand(self, reveal_all=False):
@@ -13,13 +22,18 @@ class HumanPlayer(Player):
         return cards
 
 class HumanVsAI(Game):
-    def __init__(self, ai_model_path):
+    def __init__(self, ai_type="rule", ai_model_path="cabo_ai_model.pth"):
         super().__init__()
-        self.ai_player = CaboAIPlayer("AI玩家")
-        if os.path.exists(ai_model_path):
-            self.ai_player.load_model(ai_model_path)
-            # 设置AI为评估模式
-            self.ai_player.epsilon = 0
+        
+        # 根据AI类型创建对手
+        if ai_type == "dqn" and HAS_DQN:
+            self.ai_player = CaboAIPlayer("DQN-AI")
+            if os.path.exists(ai_model_path):
+                self.ai_player.load_model(ai_model_path)
+                self.ai_player.epsilon = 0
+        else:
+            self.ai_player = SmartPlayer("规则-AI")
+        
         self.human_player = HumanPlayer("人类玩家")
         self.players = [self.human_player, self.ai_player]
 
@@ -154,55 +168,109 @@ class HumanVsAI(Game):
 
     def play_ai_turn(self):
         """AI玩家的回合"""
-        # 获取当前状态
-        state = self.ai_player.encode_state(self)
+        print(f"\n{self.ai_player.name}的回合:")
+        self.show_game_state(1)
         
-        # AI选择动作
-        action = self.ai_player.choose_action(state)
-        action_type = self.ai_player.decode_action(action)
-        
-        if action_type == "cabo" and not self.cabo_called:
-            self.cabo_called = True
-            self.cabo_caller = self.ai_player
-            print(f"\nAI玩家呼叫了Cabo！")
-            input("\n按Enter继续...")
-            return True
+        if isinstance(self.ai_player, SmartPlayer):
+            # 规则AI的回合逻辑
+            if not self.cabo_called and self.ai_player.should_call_cabo():
+                self.cabo_called = True
+                self.cabo_caller = self.ai_player
+                print(f"\n{self.ai_player.name}呼叫了Cabo！")
+                input("\n按Enter继续...")
+                return True
 
-        drawn_card = self.deck.pop()
-        print(f"\n弃牌堆顶: {self.discard_pile[-1] if self.discard_pile else '空'}")
-        
-        if drawn_card.skill:
-            if action_type == "peek":
-                unknown_positions = [i for i in range(2) if i not in self.ai_player.known_opponent_cards]
-                if unknown_positions:
-                    pos = random.choice(unknown_positions)
-                    peeked_card = self.human_player.hand[pos]
-                    self.ai_player.peek_opponent_card(pos, peeked_card)
-                    print(f"AI玩家摸到了 {drawn_card}，偷看了你的第{pos+1}张牌")
-            elif action_type == "swap":
-                my_max_card = max(((i, card) for i, card in self.ai_player.known_cards.items()),
-                                key=lambda x: x[1].number, default=(None, None))
-                opp_min_card = min(((i, card) for i, card in self.ai_player.known_opponent_cards.items()),
-                                 key=lambda x: x[1].number, default=(None, None))
-                
-                if my_max_card[0] is not None and opp_min_card[0] is not None:
-                    my_pos, my_card = my_max_card
-                    opp_pos, opp_card = opp_min_card
-                    self.ai_player.hand[my_pos], self.human_player.hand[opp_pos] = self.human_player.hand[opp_pos], self.ai_player.hand[my_pos]
-                    print(f"AI玩家摸到了 {drawn_card}，用第{my_pos+1}张牌和你的第{opp_pos+1}张牌交换")
-            self.discard_pile.append(drawn_card)
-        else:
-            if action_type.startswith("swap_pos"):
-                pos = int(action_type[-1]) - 1
-                old_card = self.ai_player.hand[pos]
-                self.ai_player.hand[pos] = drawn_card
-                self.ai_player.known_cards[pos] = drawn_card
-                self.discard_pile.append(old_card)
-                print(f"AI玩家摸到了 {drawn_card}，替换了第{pos+1}号位的牌")
-                print(f"弃掉了: {old_card}")
-            else:
+            drawn_card = self.deck.pop()
+            print(f"\n{self.ai_player.name}摸了一张牌")
+            
+            if drawn_card.skill:
+                # 使用技能牌的决策
+                if drawn_card.skill == "Peek":
+                    unknown_positions = [i for i in range(2) if i not in self.ai_player.known_opponent_cards]
+                    if unknown_positions:
+                        pos = random.choice(unknown_positions)
+                        peeked_card = self.human_player.hand[pos]
+                        self.ai_player.peek_opponent_card(pos, peeked_card)
+                        print(f"\n{self.ai_player.name}偷看了你的第{pos+1}张牌")
+                elif drawn_card.skill == "Swap":
+                    # 使用 decide_swap_with_opponent 方法
+                    swap_pos = self.ai_player.decide_swap_with_opponent(
+                        self.ai_player.known_cards,
+                        self.ai_player.known_opponent_cards
+                    )
+                    if swap_pos:
+                        my_pos, opp_pos = swap_pos
+                        my_card = self.ai_player.hand[my_pos]
+                        opp_card = self.human_player.hand[opp_pos]
+                        self.ai_player.hand[my_pos] = opp_card
+                        self.human_player.hand[opp_pos] = my_card
+                        # 更新AI的已知牌信息
+                        if my_pos in self.ai_player.known_cards:
+                            self.ai_player.known_opponent_cards[opp_pos] = my_card
+                            self.ai_player.known_cards[my_pos] = opp_card
+                        print(f"\n{self.ai_player.name}用第{my_pos+1}张牌和你的第{opp_pos+1}张牌交换")
                 self.discard_pile.append(drawn_card)
-                print(f"AI玩家摸到了 {drawn_card} 并弃掉了")
+            else:
+                action = self.ai_player.decide_action_for_drawn_card(drawn_card, self.ai_player.known_cards)
+                if isinstance(action, tuple) and action[0] == "swap":
+                    pos = action[1]
+                    old_card = self.ai_player.hand[pos]
+                    self.ai_player.hand[pos] = drawn_card
+                    self.ai_player.known_cards[pos] = drawn_card
+                    self.discard_pile.append(old_card)
+                    print(f"\n{self.ai_player.name}替换了第{pos+1}号牌")
+                else:
+                    self.discard_pile.append(drawn_card)
+                    print(f"\n{self.ai_player.name}弃掉了摸到的牌")
+            
+            input("\n按Enter继续...")
+
+        else:
+            # DQN AI的回合逻辑
+            state = self.ai_player.encode_state(self)
+            action = self.ai_player.choose_action(state)
+            action_type = self.ai_player.decode_action(action)
+            
+            if action_type == "cabo" and not self.cabo_called:
+                self.cabo_called = True
+                self.cabo_caller = self.ai_player
+                print(f"\nAI玩家呼叫了Cabo！")
+                input("\n按Enter继续...")
+                return True
+
+            drawn_card = self.deck.pop()
+            
+            if drawn_card.skill:
+                if action_type == "peek":
+                    unknown_positions = [i for i in range(2) if i not in self.ai_player.known_opponent_cards]
+                    if unknown_positions:
+                        pos = random.choice(unknown_positions)
+                        peeked_card = self.human_player.hand[pos]
+                        self.ai_player.peek_opponent_card(pos, peeked_card)
+                        print(f"\nAI玩家偷看了你的第{pos+1}张牌")
+                elif action_type == "swap":
+                    my_max_card = max(((i, card) for i, card in self.ai_player.known_cards.items()),
+                                    key=lambda x: x[1].number, default=(None, None))
+                    opp_min_card = min(((i, card) for i, card in self.ai_player.known_opponent_cards.items()),
+                                     key=lambda x: x[1].number, default=(None, None))
+                    
+                    if my_max_card[0] is not None and opp_min_card[0] is not None:
+                        my_pos, my_card = my_max_card
+                        opp_pos, opp_card = opp_min_card
+                        self.ai_player.hand[my_pos], self.human_player.hand[opp_pos] = self.human_player.hand[opp_pos], self.ai_player.hand[my_pos]
+                        print(f"\nAI玩家用第{my_pos+1}张牌和你的第{opp_pos+1}张牌交换")
+                self.discard_pile.append(drawn_card)
+            else:
+                if action_type.startswith("swap_pos"):
+                    pos = int(action_type[-1]) - 1
+                    old_card = self.ai_player.hand[pos]
+                    self.ai_player.hand[pos] = drawn_card
+                    self.ai_player.known_cards[pos] = drawn_card
+                    self.discard_pile.append(old_card)
+                    print(f"\nAI玩家替换了第{pos+1}号位的牌")
+                else:
+                    self.discard_pile.append(drawn_card)
+                    print("\nAI玩家弃掉了摸到的牌")
 
         print(f"弃牌堆顶: {self.discard_pile[-1]}")
         input("\n按Enter继续...")
@@ -211,6 +279,22 @@ class HumanVsAI(Game):
             return False
         return True
 
+def choose_opponent():
+    while True:
+        print("\n选择你的对手:")
+        if HAS_DQN:
+            print("1. DQN强化学习AI")
+        print("2. 规则基础AI")
+        choice = input("请选择: ")
+        
+        if choice == "1" and HAS_DQN:
+            return "dqn"
+        elif choice == "2":
+            return "rule"
+        else:
+            print("无效的选择，请重试")
+
 if __name__ == "__main__":
-    game = HumanVsAI("cabo_ai_model.pth")
+    ai_type = choose_opponent()
+    game = HumanVsAI(ai_type)
     game.play_game() 
