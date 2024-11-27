@@ -22,16 +22,18 @@ class SmartPlayer(Player):
             known_sum += card.number
             known_count += 1
         
-        # 如果已知牌的平均分小于等于3，而且知道至少一张牌，就叫Cabo
-        # 如果知道所有牌，且平均分小于等于4，也叫Cabo
+        # 如果已知牌的平均分小于等于2，而且知道至少一张牌，就考虑叫Cabo
         if known_count > 0:
             avg_score = known_sum / known_count
-            if avg_score <= 3:
+            # 更保守的策略，因为叫错Cabo会加5分惩罚
+            if avg_score <= 2:
                 return True
-            if known_count == len(self.hand) and avg_score <= 4:
+            # 如果知道所有牌，且总分较低，也叫Cabo
+            if known_count == len(self.hand) and known_sum <= 5:
                 return True
             
             # 如果知道一张牌是0或1，也考虑叫Cabo
+            # 因为即使另一张是较大的数，总分也不会太高
             for card in self.known_cards.values():
                 if card.number <= 1:
                     return True
